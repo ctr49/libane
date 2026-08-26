@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only OR MIT
 /* Copyright 2022 Eileen Yoon <eyn@gmx.com> */
 
+#include <linux/dev_printk.h>
 #include <linux/iopoll.h>
 
 #include "ane_tm.h"

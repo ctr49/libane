@@ -50,11 +50,16 @@ static inline int ane_env_enabled(const char *name)
 
 static inline void ane_dump_bo(const char *path, void *data, uint64_t size)
 {
+	ssize_t ret;
 	int fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
 	if (fd < 0) {
 		return;
 	}
-	(void)write(fd, data, size);
+	ret = write(fd, data, size);
+	if (ret < 0) {
+		close(fd);
+		return;
+	}
 	close(fd);
 }
 
