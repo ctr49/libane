@@ -19,16 +19,12 @@ struct ane_device {
 	int pd_count;
 
 	void __iomem *engine;
-	void __iomem *dart0;
-	void __iomem *dart1;
-	void __iomem *dart2;
 
 	struct drm_mm mm;
 	struct iommu_domain *domain;
 	unsigned long shift;
 
 	int irq;
-	int dart_irq;
 
 	struct mutex iommu_lock;
 	struct mutex engine_lock;
@@ -38,10 +34,6 @@ struct ane_hw {
 	struct {
 		u64 vm_base;
 		u64 vm_size;
-		u32 ttbr;
-		u32 select;
-		u32 command;
-		u32 invalidate;
 	} dart;
 };
 

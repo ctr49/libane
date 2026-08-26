@@ -38,20 +38,6 @@ static struct ane_bo *bo_lookup(struct drm_file *file, u32 handle)
 	return to_bo(gem);
 }
 
-static void ane_iommu_invalidate_tlb(struct ane_device *ane)
-{
-	mutex_lock(&ane->iommu_lock);
-
-	iommu_flush_iotlb_all(ane->domain);
-
-	writel(0x1, ane->dart1 + ane->hw->dart.select);
-	writel(ane->hw->dart.invalidate, ane->dart1 + ane->hw->dart.command);
-	writel(0x1, ane->dart2 + ane->hw->dart.select);
-	writel(ane->hw->dart.invalidate, ane->dart2 + ane->hw->dart.command);
-
-	mutex_unlock(&ane->iommu_lock);
-}
-
 static int ane_iommu_map_pages(struct ane_device *ane, struct ane_bo *bo)
 {
 	int err;
@@ -119,9 +105,6 @@ static void ane_iommu_unmap_pages(struct ane_device *ane, struct ane_bo *bo)
 	mutex_unlock(&ane->iommu_lock);
 
 	kfree(bo->mm);
-
-	/* Conservatively invalidate after every unmap batch */
-	ane_iommu_invalidate_tlb(ane);
 }
 
 static vm_fault_t ane_gem_vm_fault(struct vm_fault *vmf)
@@ -432,15 +415,6 @@ static void ane_iommu_domain_free(struct ane_device *ane)
 	drm_mm_takedown(&ane->mm);
 }
 
-static void ane_iommu_remap_ttbr(struct ane_device *ane)
-{
-	/* L2 DMA fails without */
-	writel_relaxed(readl_relaxed(ane->dart0 + ane->hw->dart.ttbr),
-		       ane->dart1 + ane->hw->dart.ttbr);
-	writel_relaxed(readl_relaxed(ane->dart0 + ane->hw->dart.ttbr),
-		       ane->dart2 + ane->hw->dart.ttbr);
-}
-
 static void ane_detach_genpd(struct ane_device *ane)
 {
 	if (ane->pd_count <= 1)
@@ -500,7 +474,6 @@ static int ane_platform_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct ane_device *ane;
 	struct drm_device *drm;
-	struct resource *res;
 	int err;
 
 	ane = devm_drm_dev_alloc(dev, &ane_drm_driver, struct ane_device, drm);
@@ -526,41 +499,9 @@ static int ane_platform_probe(struct platform_device *pdev)
 		goto detach_genpd;
 	}
 
-	ane->dart_irq = platform_get_irq_byname(pdev, "dart");
-	if (ane->dart_irq < 0) {
-		err = -ENODEV;
-		goto detach_genpd;
-	}
-	disable_irq(ane->dart_irq);
-
 	ane->engine = devm_platform_ioremap_resource_byname(pdev, "engine");
 	if (IS_ERR(ane->engine)) {
 		err = PTR_ERR(ane->engine);
-		goto detach_genpd;
-	}
-
-	ane->dart1 = devm_platform_ioremap_resource_byname(pdev, "dart1");
-	if (IS_ERR(ane->dart1)) {
-		err = PTR_ERR(ane->dart1);
-		goto detach_genpd;
-	}
-
-	ane->dart2 = devm_platform_ioremap_resource_byname(pdev, "dart2");
-	if (IS_ERR(ane->dart2)) {
-		err = PTR_ERR(ane->dart2);
-		goto detach_genpd;
-	}
-
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "dart0");
-	if (!res) {
-		err = -ENODEV;
-		goto detach_genpd;
-	}
-
-	/* Simply ioremap since it's a shared register zone */
-	ane->dart0 = devm_ioremap(dev, res->start, resource_size(res));
-	if (IS_ERR(ane->dart0)) {
-		err = PTR_ERR(ane->dart0);
 		goto detach_genpd;
 	}
 
@@ -571,7 +512,6 @@ static int ane_platform_probe(struct platform_device *pdev)
 	if (err < 0)
 		goto detach_genpd;
 
-	ane_iommu_remap_ttbr(ane);
 	ane_tm_enable(ane);
 
 	/* Measured 3sec on macos, but 1sec seems more stable */
@@ -614,15 +554,12 @@ static void ane_platform_remove(struct platform_device *pdev)
 
 static int __maybe_unused ane_runtime_suspend(struct device *dev)
 {
-	struct ane_device *ane = dev_get_drvdata(dev);
-	ane_iommu_invalidate_tlb(ane);
 	return 0;
 }
 
 static int __maybe_unused ane_runtime_resume(struct device *dev)
 {
 	struct ane_device *ane = dev_get_drvdata(dev);
-	ane_iommu_remap_ttbr(ane);
 	ane_tm_enable(ane);
 	return 0;
 }
@@ -634,20 +571,10 @@ static const struct dev_pm_ops ane_pm_ops = {
 };
 // clang-format on
 
-/* T8020/T6000 registers */
-#define DART_T8020_STREAM_COMMAND	     0x20
-#define DART_T8020_STREAM_SELECT	     0x34
-#define DART_T8020_TTBR			     0x200
-#define DART_T8020_STREAM_COMMAND_INVALIDATE BIT(20)
-
 static const struct ane_hw ane_hw_t8020 = {
 	.dart = {
 		.vm_base = 0x4000,
 		.vm_size = 0xe0000000,
-		.ttbr = DART_T8020_TTBR,
-		.select = DART_T8020_STREAM_SELECT,
-		.command = DART_T8020_STREAM_COMMAND,
-		.invalidate = DART_T8020_STREAM_COMMAND_INVALIDATE,
 	},
 };
 
